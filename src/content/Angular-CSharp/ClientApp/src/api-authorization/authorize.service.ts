@@ -43,6 +43,7 @@ export class AuthorizeService {
   private popUpDisabled = true;
   private userManager?: UserManager;
   private userSubject: BehaviorSubject<IUser | null> = new BehaviorSubject<IUser | null>(null);
+  private ensureUserManagerInitializedPromise?: Promise<void>;
 
   public isAuthenticated(): Observable<boolean> {
     return this.getUser().pipe(map(u => !!u));
@@ -170,24 +171,32 @@ export class AuthorizeService {
   }
 
   private async ensureUserManagerInitialized(): Promise<void> {
-    if (this.userManager !== undefined) {
-      return;
+    const ensureUserManagerInitializedInternal = async (): Promise<void> => {
+      if (this.userManager !== undefined) {
+        return;
+      }
+
+      const response = await fetch(ApplicationPaths.ApiAuthorizationClientConfigurationUrl);
+      if (!response.ok) {
+        throw new Error(`Could not load settings for '${ApplicationName}'`);
+      }
+
+      const settings: any = await response.json();
+      settings.automaticSilentRenew = true;
+      settings.includeIdTokenInSilentRenew = true;
+      this.userManager = new UserManager(settings);
+
+      this.userManager.events.addUserSignedOut(async () => {
+        await this.userManager!.removeUser();
+        this.userSubject.next(null);
+      });
+    };
+
+    if(!this.ensureUserManagerInitializedPromise) {
+      this.ensureUserManagerInitializedPromise = ensureUserManagerInitializedInternal();
     }
 
-    const response = await fetch(ApplicationPaths.ApiAuthorizationClientConfigurationUrl);
-    if (!response.ok) {
-      throw new Error(`Could not load settings for '${ApplicationName}'`);
-    }
-
-    const settings: any = await response.json();
-    settings.automaticSilentRenew = true;
-    settings.includeIdTokenInSilentRenew = true;
-    this.userManager = new UserManager(settings);
-
-    this.userManager.events.addUserSignedOut(async () => {
-      await this.userManager!.removeUser();
-      this.userSubject.next(null);
-    });
+    return this.ensureUserManagerInitializedPromise;
   }
 
   private getUserFromStorage(): Observable<IUser | null> {
